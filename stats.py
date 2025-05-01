@@ -34,13 +34,7 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
         sheet = init_gsheet()
         records = sheet.get_all_values()
 
-        # Для отладки выведем структуру данных
-        print("Полученные данные:")
-        for i, row in enumerate(records[:5]):  # Печатаем первые 5 строк
-            print(f"Строка {i}: {row}")
-
         # Создаем DataFrame - берем все строки кроме заголовка
-        # Используем только первые 5 столбцов (A-E)
         data = []
         for row in records[1:]:  # Пропускаем заголовок
             if len(row) >= 5:  # Нам нужно минимум 5 столбцов
@@ -53,8 +47,6 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
                 })
 
         df = pd.DataFrame(data)
-        print("\nDataFrame перед обработкой:")
-        print(df.head())
 
         # Преобразуем типы данных
         try:
@@ -63,14 +55,15 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
             df['Повторения'] = pd.to_numeric(df['Повторения'], errors='coerce')
             df['Вес (кг)'] = pd.to_numeric(df['Вес (кг)'], errors='coerce')
 
-            # Удаляем строки с некорректными данными
+            # Удаляем только строки с некорректными датами или пустыми упражнениями
             df = df.dropna(subset=['Дата', 'Упражнение'])
 
-            # Фильтруем аномальные значения веса
-            df = df[(df['Вес (кг)'] >= 0) & (df['Вес (кг)'] < 1000)]
+            # Фильтруем только неположительные значения подходов и повторений
+            df = df[(df['Подходы'] > 0) & (df['Повторения'] > 0)]
 
-            print("\nDataFrame после обработки:")
-            print(df.head())
+            # Не фильтруем по весу, чтобы включить все записи
+            # df = df[(df['Вес (кг)'] >= 0) & (df['Вес (кг)'] < 1000)]
+
         except Exception as e:
             await message.answer("Ошибка при обработке данных таблицы")
             print(f"Ошибка преобразования данных: {str(e)}")
@@ -79,7 +72,6 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
 
         if df.empty:
             await message.answer("Нет корректных данных для анализа")
-            print("DataFrame пуст после обработки")
             await state.clear()
             return
 
@@ -101,32 +93,52 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
             await state.clear()
             return
 
+        # Рассчитываем статистику
+        # Количество уникальных тренировочных дней
+        unique_days = df['Дата'].dt.date.nunique()
+
+        # Общее количество подходов и повторений
+        total_sets = int(df['Подходы'].sum())
+        total_reps = int((df['Подходы'] * df['Повторения']).sum())
+
+        # Самое популярное упражнение (по количеству записей)
+        most_common_exercise_by_entries = df['Упражнение'].value_counts().idxmax()
+
+        # Упражнение с максимальным количеством повторений
+        df['Общие_повторения'] = df['Подходы'] * df['Повторения']
+        exercise_by_reps = df.groupby('Упражнение')['Общие_повторения'].sum().idxmax()
+
+        # Упражнение с максимальным количеством подходов
+        exercise_by_sets = df.groupby('Упражнение')['Подходы'].sum().idxmax()
+
+        # Самый активный день
+        most_active_day = df['Дата'].dt.date.value_counts().idxmax().strftime('%d.%m.%Y')
+
+        # Количество уникальных упражнений и общее количество записей
+        unique_exercises = df['Упражнение'].nunique()
+        total_exercise_entries = len(df)
+
         # Создаем графики
         img_buffer = BytesIO()
         plt.figure(figsize=(12, 16))
 
         # 1. Количество подходов по упражнениям
         plt.subplot(3, 1, 1)
-        df_grouped = df.groupby('Упражнение')['Подходы'].sum()
-        df_grouped.plot(kind='bar', color='skyblue')
-        plt.title(f'Подходы по упражнениям {period_title}')
-        plt.ylabel('Количество подходов')
-        plt.grid(axis='y')
+        df.groupby('Упражнение')['Подходы'].sum().sort_values().plot(kind='barh', color='skyblue')
+        plt.title('Общее количество подходов')
+        plt.xlabel('Подходы')
+        plt.grid(axis='x')
 
-        # 2. Общее количество повторений
+        # 2. Количество повторений по упражнениям
         plt.subplot(3, 1, 2)
-        df['Общие_повторения'] = df['Подходы'] * df['Повторения']
-        df_reps = df.groupby('Упражнение')['Общие_повторения'].sum()
-        df_reps.plot(kind='bar', color='lightgreen')
+        df.groupby('Упражнение')['Общие_повторения'].sum().sort_values().plot(kind='barh', color='lightgreen')
         plt.title('Общее количество повторений')
-        plt.ylabel('Количество повторений')
-        plt.grid(axis='y')
+        plt.xlabel('Повторения')
+        plt.grid(axis='x')
 
         # 3. Активность по дням
         plt.subplot(3, 1, 3)
-        df['Дата_группа'] = df['Дата'].dt.date
-        daily_count = df['Дата_группа'].value_counts().sort_index()
-        daily_count.plot(kind='bar', color='salmon')
+        df['Дата'].dt.date.value_counts().sort_index().plot(kind='bar', color='salmon')
         plt.title('Активность по дням')
         plt.ylabel('Количество записей')
         plt.xticks(rotation=45)
@@ -137,19 +149,17 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
         plt.close()
 
         # Формируем текстовую статистику
-        total_reps = (df['Подходы'] * df['Повторения']).sum()
-        most_common_exercise = df['Упражнение'].mode()[0] if not df['Упражнение'].mode().empty else "нет данных"
-        most_active_day = df['Дата_группа'].value_counts().idxmax().strftime('%d.%m.%Y') if not df[
-            'Дата_группа'].value_counts().empty else "нет данных"
-
         stats_text = (
             f"📊 Статистика {period_title}:\n"
-            f"• Упражнений: {len(df['Упражнение'].unique())}\n"
-            f"• Тренировок: {len(df)}\n"
-            f"• Подходов: {int(df['Подходы'].sum())}\n"
-            f"• Повторений: {int(total_reps)}\n"
-            f"• Популярное упражнение: {most_common_exercise}\n"
-            f"• Активный день: {most_active_day}\n"
+            f"• Всего записей упражнений: {total_exercise_entries}\n"
+            f"• Уникальных упражнений: {unique_exercises}\n"
+            f"• Тренировочных дней: {unique_days}\n"
+            f"• Всего подходов: {total_sets}\n"
+            f"• Всего повторений: {total_reps}\n"
+            f"• Самое частое упражнение: {most_common_exercise_by_entries}\n"
+            f"• Упражнение с макс. подходами: {exercise_by_sets}\n"
+            f"• Упражнение с макс. повторениями: {exercise_by_reps}\n"
+            f"• Самый активный день: {most_active_day}\n"
             f"• Период: {df['Дата'].min().strftime('%d.%m.%Y')} - {df['Дата'].max().strftime('%d.%m.%Y')}"
         )
 
@@ -162,7 +172,7 @@ async def process_stats_data(message: types.Message, state: FSMContext, bot: Bot
 
     except Exception as e:
         await message.answer("Произошла ошибка при формировании отчета")
-        print(f"Критическая ошибка: {str(e)}")
+        print(f"Ошибка: {str(e)}")
         import traceback
         traceback.print_exc()
     finally:
