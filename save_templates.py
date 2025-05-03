@@ -35,11 +35,13 @@ class TemplateStates:
 
 
 async def start_template_creation(message: Message, state: FSMContext):
+    """Начинает процесс создания шаблона"""
     await message.answer("📝 Введите название для нового шаблона тренировки:")
     await state.set_state(TemplateStates.WAITING_FOR_TEMPLATE_NAME)
 
 
 async def process_template_name(message: Message, state: FSMContext):
+    """Обрабатывает название шаблона"""
     await state.update_data(template_name=message.text)
     await message.answer(
         "🏋️ Теперь введите упражнения в формате:\n"
@@ -54,6 +56,7 @@ async def process_template_name(message: Message, state: FSMContext):
 
 
 async def process_exercises_data(message: Message, state: FSMContext, bot: Bot):
+    """Обрабатывает введенные упражнения"""
     data = await state.get_data()
     template_name = data.get('template_name')
     exercises_text = message.text
@@ -107,26 +110,28 @@ async def process_exercises_data(message: Message, state: FSMContext, bot: Bot):
 
 
 async def process_format_selection(message: Message, state: FSMContext, bot: Bot):
+    """Обрабатывает выбор формата и создает файлы"""
     data = await state.get_data()
     template_name = data.get('template_name')
     exercises = data.get('exercises')
     format_choice = message.text.lower()
 
     try:
-        files_to_send = []
+        files_created = []
 
-        # Создаем Excel
+        # Создание Excel файла
         if format_choice in ["excel", "оба формата"] and EXCEL_AVAILABLE:
             excel_file = f"{template_name}.xlsx"
             try:
                 df = pd.DataFrame(exercises)
                 df.to_excel(excel_file, index=False, engine='openpyxl')
-                files_to_send.append(excel_file)
+                files_created.append(excel_file)
+                logger.info(f"Создан Excel-файл: {excel_file}")
             except Exception as e:
-                await message.answer("❌ Ошибка создания Excel-файла")
-                logger.error(f"Excel error: {str(e)}")
+                logger.error(f"Ошибка создания Excel: {str(e)}")
+                await message.answer("❌ Не удалось создать Excel-файл")
 
-        # Создаем Word
+        # Создание Word файла
         if format_choice in ["word", "оба формата"] and DOCX_AVAILABLE:
             word_file = f"{template_name}.docx"
             try:
@@ -150,41 +155,51 @@ async def process_format_selection(message: Message, state: FSMContext, bot: Bot
                     row[3].text = str(ex['Вес (кг)'])
 
                 doc.save(word_file)
-                files_to_send.append(word_file)
+                files_created.append(word_file)
+                logger.info(f"Создан Word-файл: {word_file}")
             except Exception as e:
-                await message.answer("❌ Ошибка создания Word-документа")
-                logger.error(f"Word error: {str(e)}")
+                logger.error(f"Ошибка создания Word: {str(e)}")
+                await message.answer("❌ Не удалось создать Word-документ")
 
-        # Отправляем файлы
-        for file_path in files_to_send:
+        # Отправка и удаление файлов
+        for file_path in files_created:
             try:
-                if os.path.exists(file_path):
-                    await bot.send_document(
-                        chat_id=message.chat.id,
-                        document=FSInputFile(file_path),
-                        caption=f"📁 {template_name}"
-                    )
-                else:
-                    logger.error(f"Файл не найден: {file_path}")
+                # Отправка файла
+                await bot.send_document(
+                    chat_id=message.chat.id,
+                    document=FSInputFile(file_path),
+                    caption=f"🏋️ Шаблон '{template_name}'"
+                )
+                logger.info(f"Файл {file_path} отправлен")
+
             except Exception as e:
                 logger.error(f"Ошибка отправки: {str(e)}")
-                await message.answer(f"❌ Ошибка отправки файла {os.path.basename(file_path)}")
-            finally:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                await message.answer(f"⚠️ Ошибка при отправке файла {file_path}")
 
-        if files_to_send:
-            await message.answer("✅ Шаблон успешно создан!", reply_markup=types.ReplyKeyboardRemove())
+            finally:
+                # Гарантированное удаление файла
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Файл {file_path} удален")
+                    else:
+                        logger.warning(f"Файл {file_path} не найден для удаления")
+                except Exception as e:
+                    logger.error(f"Ошибка удаления файла {file_path}: {str(e)}")
+
+        if files_created:
+            await message.answer("✅ Файлы успешно созданы и отправлены!")
         else:
             await message.answer("❌ Не удалось создать ни один файл")
 
         await state.clear()
 
     except Exception as e:
-        await message.answer(f"⚠️ Критическая ошибка: {str(e)}")
-        logger.error(f"Critical error: {str(e)}")
+        logger.error(f"Критическая ошибка: {str(e)}")
+        await message.answer("⚠️ Произошла критическая ошибка при обработке запроса")
         await state.clear()
 
 
 async def send_template(message: Message):
+    """Обработчик для команды /get_template"""
     await message.answer("ℹ️ Для получения шаблона используйте /create_template")
