@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 
 import add_exercise
 import stats
+import save_templates
 
 # Токен бота
 TOKEN = "7992184754:AAEUm6DZ5hcaDuWETV6ve8yn-BD1-vt0LKk"
@@ -13,7 +14,6 @@ TOKEN = "7992184754:AAEUm6DZ5hcaDuWETV6ve8yn-BD1-vt0LKk"
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-
 
 # Обработчик команды /start
 @dp.message(Command("start"))
@@ -23,25 +23,39 @@ async def welcome(message: Message):
         f"Здравствуйте, {user_name}! 👋\nЯ бот фитнес-трекер. Я помогу вам:\n"
         "   1) Добавлять упражнения (/add_exercise)\n"
         "   2) Просматривать статистику (/stats)\n"
-        "   3) Контролировать питание\n"
-        "   4) Не забывать о тренировках\n"
-        "   5) Мотивировать\n"
-        "   6) Составлять отчет о проделанной работе"
+        "   3) Создавать шаблоны тренировок (/create_template)\n"
+        "   4) Контролировать питание\n"
+        "   5) Не забывать о тренировках\n"
+        "   6) Мотивировать\n"
+        "   7) Составлять отчет о проделанной работе"
     )
-
 
 # Обработчик команды /add_exercise
 @dp.message(Command("add_exercise"))
 async def add_exercise_handler(message: Message, state: FSMContext):
     await add_exercise.start_adding_exercise(message, state)
 
-
 # Обработчик команды /stats
 @dp.message(Command("stats"))
 async def stats_handler(message: Message, state: FSMContext):
     await stats.start_stats(message, state)
 
+# Обработчик команды /create_template
+@dp.message(Command("create_template"))
+async def create_template_handler(message: Message, state: FSMContext):
+    # Проверяем, не находится ли пользователь в другом процессе
+    current_state = await state.get_state()
+    if current_state is None:
+        await save_templates.start_template_creation(message, state)
+    else:
+        await message.answer("Пожалуйста, завершите текущую операцию перед созданием нового шаблона")
 
+# Обработчик команды /get_template (временно отключен)
+@dp.message(Command("get_template"))
+async def get_template_handler(message: Message):
+    await message.answer("Функция получения сохраненных шаблонов временно недоступна")
+
+# Обработчик всех сообщений
 @dp.message()
 async def process_all_messages(message: Message, state: FSMContext):
     current_state = await state.get_state()
@@ -55,13 +69,18 @@ async def process_all_messages(message: Message, state: FSMContext):
     elif current_state == stats.StatsStates.WAITING_FOR_PERIOD:
         await stats.process_stats_data(message, state, bot)
 
+    # Обработка состояний создания шаблона
+    elif current_state == save_templates.TemplateStates.WAITING_FOR_TEMPLATE_NAME:
+        await save_templates.process_template_name(message, state)
+    elif current_state == save_templates.TemplateStates.WAITING_FOR_EXERCISES:
+        await save_templates.process_exercises_data(message, state, bot)
+    elif current_state == save_templates.TemplateStates.WAITING_FOR_FORMAT:
+        await save_templates.process_format_selection(message, state, bot)
 
 # Запуск бота
 async def main():
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
     import asyncio
-
     asyncio.run(main())
